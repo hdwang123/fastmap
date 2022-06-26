@@ -46,6 +46,7 @@ public class Test1 {
         timestamp = fastMap.expire(key, 10000L);
         System.out.println("过期时间；" + timestamp);
 
+        int i= 0;
         while (true) {
             try {
                 Thread.sleep(2000L);
@@ -57,6 +58,15 @@ public class Test1 {
             System.out.println("key:" + key + "存活时间；" + ttl);
             if (ttl == null) {
                 break;
+            }
+            i++;
+
+            if(i==3) {
+                //续命
+                System.out.println("重新设置过期时间");
+                fastMap.expire(key, 20000L);
+                ttl = fastMap.ttl(key);
+                System.out.println("key:" + key + "存活时间；" + ttl);
             }
         }
 
