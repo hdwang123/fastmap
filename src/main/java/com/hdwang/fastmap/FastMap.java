@@ -363,7 +363,10 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             if (expireTime != null) {
                 //清除之前设置的过期时间
                 this.keyExpireMap.remove(key);
-                this.expireKeysMap.get(expireTime).remove(key);
+                List<K> keys = this.expireKeysMap.get(expireTime);
+                if (keys != null) {
+                    keys.remove(key);
+                }
             }
             expireTime = System.currentTimeMillis() + ms;
             this.keyExpireMap.put(key, expireTime);
