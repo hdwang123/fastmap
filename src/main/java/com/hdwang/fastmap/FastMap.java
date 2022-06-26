@@ -72,7 +72,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     }
 
     /**
-     * 默认构造器，不启用排序
+     * 默认构造器，启用过期，不启用排序
      */
     public FastMap() {
         this.comparator = null;
@@ -82,7 +82,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     }
 
     /**
-     * 构造器，enableExpire配置是否启用过期
+     * 构造器，enableExpire配置是否启用过期，不启用排序
      *
      * @param enableExpire 是否启用过期
      */
@@ -107,9 +107,10 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     }
 
     /**
-     * 构造器，启用排序，排序器由自己传入
+     * 构造器，enableExpire配置是否启用过期，启用排序，排序器由自己传入
      *
-     * @param comparator 排序器
+     * @param enableExpire 是否启用过期
+     * @param comparator   排序器
      */
     public FastMap(boolean enableExpire, Comparator<? super K> comparator) {
         this.enableExpire = enableExpire;
