@@ -11,9 +11,9 @@ public class Test2 {
 
     public static void main(String[] args) throws Exception {
         //场景：手机号请求频率限制：1分钟2次，5分钟5次
-        IFastMap<String, IFastMap<Long, Long>> fastMap = new FastMap<>();
+        IFastMap<String, IFastMap<Long, Long>> fastMap = new FastMap<>(true);
         //记录每次访问记录：key:时间戳，value:访问次数
-        IFastMap<Long, Long> innerFastMap = new FastMap<>(true);
+        IFastMap<Long, Long> innerFastMap = new FastMap<>(false, true);
         SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
         innerFastMap.put(dateFormat.parse("2022-06-26 16:00:00").getTime(), 1L);
         innerFastMap.put(dateFormat.parse("2022-06-26 16:00:30").getTime(), 1L);

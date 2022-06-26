@@ -11,7 +11,7 @@ public class Test1 {
 
     public static void main(String[] args) {
         boolean enableSort = true; //是否支持排序
-        IFastMap<Long, String> fastMap = new FastMap<>(enableSort);
+        IFastMap<Long, String> fastMap = new FastMap<>(true, enableSort);
         fastMap.put(2L, "aaa2");
         fastMap.put(1L, "aaa1");
         fastMap.put(20L, "aaa20");
@@ -26,13 +26,13 @@ public class Test1 {
         for (Map.Entry<Long, String> entry : fastMap.entrySet()) {
             System.out.println(entry.getKey() + ":" + entry.getValue());
         }
-        try{
+        try {
             System.out.println("FastMap输出2-20的值");
             SortedMap<Long, String> sortedMap = fastMap.subMap(2L, 21L);
             for (Map.Entry<Long, String> entry : sortedMap.entrySet()) {
                 System.out.println(entry.getKey() + ":" + entry.getValue());
             }
-        }catch (Exception ex){
+        } catch (Exception ex) {
             ex.printStackTrace();
         }
 
@@ -46,7 +46,7 @@ public class Test1 {
         timestamp = fastMap.expire(key, 10000L);
         System.out.println("过期时间；" + timestamp);
 
-        int i= 0;
+        int i = 0;
         while (true) {
             try {
                 Thread.sleep(2000L);
@@ -61,7 +61,7 @@ public class Test1 {
             }
             i++;
 
-            if(i==3) {
+            if (i == 3) {
                 //续命
                 System.out.println("重新设置过期时间");
                 fastMap.expire(key, 20000L);

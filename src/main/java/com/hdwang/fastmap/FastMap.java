@@ -32,9 +32,14 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     private HashMap<K, Long> keyExpireMap = new HashMap<>();
 
     /**
-     * 是否启用排序
+     * 是否启用排序（默认不启用）
      */
     boolean enableSort = false;
+
+    /**
+     * 是否启用数据过期功能（默认启用）
+     */
+    boolean enableExpire = true;
 
     /**
      * The comparator used to maintain order in this tree map, or
@@ -72,16 +77,31 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     public FastMap() {
         this.comparator = null;
         this.enableSort = false;
+        this.enableExpire = true;
         this.init();
     }
 
     /**
-     * 构造器，enableSort配置是否启用排序
+     * 构造器，enableExpire配置是否启用过期
      *
-     * @param enableSort 是否启用排序
+     * @param enableExpire 是否启用过期
      */
-    public FastMap(boolean enableSort) {
+    public FastMap(boolean enableExpire) {
         this.comparator = null;
+        this.enableSort = false;
+        this.enableExpire = enableExpire;
+        this.init();
+    }
+
+    /**
+     * 构造器，enableExpire配置是否启用过期，enableSort配置是否启用排序
+     *
+     * @param enableExpire 是否启用过期
+     * @param enableSort   是否启用排序
+     */
+    public FastMap(boolean enableExpire, boolean enableSort) {
+        this.comparator = null;
+        this.enableExpire = enableExpire;
         this.enableSort = enableSort;
         this.init();
     }
@@ -91,7 +111,8 @@ public class FastMap<K, V> implements IFastMap<K, V> {
      *
      * @param comparator 排序器
      */
-    public FastMap(Comparator<? super K> comparator) {
+    public FastMap(boolean enableExpire, Comparator<? super K> comparator) {
+        this.enableExpire = enableExpire;
         this.comparator = comparator;
         this.enableSort = true;
         this.init();
@@ -101,15 +122,16 @@ public class FastMap<K, V> implements IFastMap<K, V> {
      * 初始化
      */
     public void init() {
-        //启用定时器，定时删除过期key,1秒后启动，定时1秒
-        Timer timer = new Timer("expireTask-" + serialNumber(), true);
-        timer.schedule(new TimerTask() {
-            @Override
-            public void run() {
-                removeExpireData("timer");
-            }
-        }, 1000, 1000);
-
+        if (this.enableExpire) {
+            //启用定时器，定时删除过期key,1秒后启动，定时1秒
+            Timer timer = new Timer("expireTask-" + serialNumber(), true);
+            timer.schedule(new TimerTask() {
+                @Override
+                public void run() {
+                    removeExpireData("timer");
+                }
+            }, 1000, 1000);
+        }
     }
 
 
@@ -355,6 +377,9 @@ public class FastMap<K, V> implements IFastMap<K, V> {
 
     @Override
     public Long expire(K key, Long ms) {
+        if (!enableExpire) {
+            throw new RuntimeException("未启用过期功能");
+        }
         try {
             expireKeysWriteLock.lock();
 
@@ -386,6 +411,9 @@ public class FastMap<K, V> implements IFastMap<K, V> {
 
     @Override
     public Long ttl(K key) {
+        if (!enableExpire) {
+            throw new RuntimeException("未启用过期功能");
+        }
         V val = this.get(key);
         if (val == null) {
             //数据不存在,存活时间返回null
@@ -449,6 +477,9 @@ public class FastMap<K, V> implements IFastMap<K, V> {
      * 删除过期的数据
      */
     private void removeExpireData(String flag) {
+        if (!enableExpire) {
+            return;
+        }
         //查找过期key
         Long curTimestamp = System.currentTimeMillis();
         SortedMap<Long, List<K>> expiredKeysMap;
@@ -456,7 +487,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             expireKeysReadLock.lock();
             //过期时间在【从前至此刻】区间内的都为过期的key
             expiredKeysMap = this.expireKeysMap.headMap(curTimestamp, true);
-            System.out.println(String.format("thread:%s caller:%s removeExpireData【curTime=%s,expiredKeysMap=%s】", Thread.currentThread().getName(), flag, curTimestamp, expiredKeysMap));
+//            System.out.println(String.format("thread:%s caller:%s removeExpireData【curTime=%s,expiredKeysMap=%s】", Thread.currentThread().getName(), flag, curTimestamp, expiredKeysMap));
         } finally {
             expireKeysReadLock.unlock();
         }
