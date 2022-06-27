@@ -4,6 +4,7 @@ import java.util.Map;
 import java.util.SortedMap;
 
 /**
+ * 功能测试
  * @author wanghuidong
  * 时间： 2022/6/26 12:59
  */
@@ -28,7 +29,7 @@ public class Test1 {
         }
         try {
             System.out.println("FastMap输出2-20的值");
-            SortedMap<Long, String> sortedMap = fastMap.subMap(2L, 21L);
+            Map<Long, String> sortedMap = fastMap.subMap(2L, 21L);
             for (Map.Entry<Long, String> entry : sortedMap.entrySet()) {
                 System.out.println(entry.getKey() + ":" + entry.getValue());
             }
