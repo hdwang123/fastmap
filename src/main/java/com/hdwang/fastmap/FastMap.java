@@ -1,6 +1,10 @@
 package com.hdwang.fastmap;
 
 import java.util.*;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -124,14 +128,22 @@ public class FastMap<K, V> implements IFastMap<K, V> {
      */
     public void init() {
         if (this.enableExpire) {
-            //启用定时器，定时删除过期key,1秒后启动，定时1秒
-            Timer timer = new Timer("expireTask-" + serialNumber(), true);
-            timer.schedule(new TimerTask() {
+            //启用定时器，定时删除过期key,1秒后启动，定时1秒, 因为时间间隔计算基于nanoTime,比timer.schedule更靠谱
+            ScheduledExecutorService scheduledExecutorService = new ScheduledThreadPoolExecutor(1, new ThreadFactory() {
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread thread = new Thread(r);
+                    thread.setName("expireTask-" + serialNumber());
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            });
+            scheduledExecutorService.scheduleWithFixedDelay(new Runnable() {
                 @Override
                 public void run() {
-                    removeExpireData("timer");
+                    removeExpireData("scheduledExecutorService");
                 }
-            }, 1000, 1000);
+            }, 1, 1, TimeUnit.SECONDS);
         }
     }
 
