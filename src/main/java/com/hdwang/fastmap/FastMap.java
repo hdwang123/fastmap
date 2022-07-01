@@ -76,6 +76,11 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     }
 
     /**
+     * 100万，1毫秒=100万纳秒
+     */
+    private static final int ONE_MILLION = 100_0000;
+
+    /**
      * 默认构造器，启用过期，不启用排序
      */
     public FastMap() {
@@ -484,7 +489,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
                     keys.remove(key);
                 }
             }
-            expireTime = System.currentTimeMillis() + ms;
+            expireTime = System.nanoTime() + ms * ONE_MILLION;
             this.keyExpireMap.put(key, expireTime);
             List<K> keys = this.expireKeysMap.get(expireTime);
             if (keys == null) {
@@ -516,7 +521,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             if (expireTime == null) {
                 return null;
             }
-            return expireTime - System.currentTimeMillis();
+            return (expireTime - System.nanoTime()) / ONE_MILLION;
         } finally {
             expireKeysReadLock.unlock();
         }
@@ -530,7 +535,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             return;
         }
         //查找过期key
-        Long curTimestamp = System.currentTimeMillis();
+        Long curTimestamp = System.nanoTime();
         Map<Long, List<K>> expiredKeysMap = new LinkedHashMap<>();
         try {
             expireKeysReadLock.lock();
