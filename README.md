@@ -13,7 +13,7 @@
 
 ## 使用教程
 
-````
+```java
 public class Main {
 
     public static void main(String[] args) throws Exception {
@@ -64,4 +64,4 @@ public class Main {
         Thread.sleep(60 * 1000);
     }
 }
-````
+```
