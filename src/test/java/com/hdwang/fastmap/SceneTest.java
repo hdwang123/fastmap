@@ -7,7 +7,7 @@ import java.text.SimpleDateFormat;
  * @author wanghuidong
  * 时间： 2022/6/26 16:14
  */
-public class Test2 {
+public class SceneTest {
 
     public static void main(String[] args) throws Exception {
         //场景：手机号请求频率限制：1分钟2次，5分钟5次

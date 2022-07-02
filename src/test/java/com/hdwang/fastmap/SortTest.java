@@ -8,7 +8,7 @@ import java.util.*;
  * @author wanghuidong
  * 时间： 2022/7/2 20:57
  */
-public class Test6 {
+public class SortTest {
 
 
     public static void main(String[] args) {

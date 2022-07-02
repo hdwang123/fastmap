@@ -8,7 +8,7 @@ import java.util.Date;
  * @author wanghuidong
  * 时间： 2022/7/2 14:43
  */
-public class Test5 {
+public class ExpireCallbackTest {
 
     public static void main(String[] args) {
         IFastMap<Long, String> fastMap = new FastMap<>(true);

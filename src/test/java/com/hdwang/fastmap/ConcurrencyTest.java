@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * @author wanghuidong
  * 时间： 2022/6/27 9:58
  */
-public class Test3 {
+public class ConcurrencyTest {
 
     public static void main(String[] args) throws Exception {
         IFastMap<Long, String> map = new FastMap<>(true, true);

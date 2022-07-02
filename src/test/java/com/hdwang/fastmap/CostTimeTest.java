@@ -11,7 +11,7 @@ import java.util.Random;
  * @author wanghuidong
  * 时间： 2022/6/28 15:02
  */
-public class Test4 {
+public class CostTimeTest {
 
     public static void main(String[] args) {
         //存入100万数据
@@ -40,15 +40,15 @@ public class Test4 {
 
 
 //        for (int i = 0; i < getSize; i++) {
-            //100万取1万次10条记录：14-15ms
+        //100万取1万次10条记录：14-15ms
 //            Map<Integer, String> map = fastmap.headMap(10);
 //            System.out.println(map);
 
-            //100万取1万次10条记录：15-18ms
+        //100万取1万次10条记录：15-18ms
 //            Map<Integer, String> map = fastmap.tailMap(99_9990);
 ////            System.out.println(map);
 //
-            //100万取1万次10条记录：14-19ms
+        //100万取1万次10条记录：14-19ms
 //            Map<Integer, String> map = fastmap.subMap(89_9990, 89_9999);
 ////            System.out.println(map);
 //        }

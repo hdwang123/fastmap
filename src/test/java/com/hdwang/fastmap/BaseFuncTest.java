@@ -8,7 +8,7 @@ import java.util.SortedMap;
  * @author wanghuidong
  * 时间： 2022/6/26 12:59
  */
-public class Test1 {
+public class BaseFuncTest {
 
     public static void main(String[] args) {
         boolean enableSort = true; //是否支持排序
