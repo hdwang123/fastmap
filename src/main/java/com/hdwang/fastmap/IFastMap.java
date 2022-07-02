@@ -88,13 +88,26 @@ public interface IFastMap<K, V> extends Map<K, V> {
 
 
     /**
-     * 设置过期时间（n毫秒后）
+     * 设置过期时间（n毫秒后），重复调用可以重置过期时间
      *
      * @param key 指定Key
      * @param ms  指定毫秒数后过期
      * @return 具体的过期时刻
      */
     Long expire(K key, Long ms);
+
+    /**
+     * 设置过期时间（n毫秒后）和过期回调函数,重复调用可以重置过期时间和回调函数。
+     * <p>
+     * 如果仅需重置过期时间可调用: expire(K key, Long ms);
+     * </p>
+     *
+     * @param key      指定key
+     * @param ms       指定毫秒数后过期
+     * @param callback 过期回调函数
+     * @return 具体的过期时刻
+     */
+    Long expire(K key, Long ms, ExpireCallback<K, V> callback);
 
     /**
      * 获取Key的存活时间

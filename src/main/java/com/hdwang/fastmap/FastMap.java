@@ -3,13 +3,14 @@ package com.hdwang.fastmap;
 import java.util.*;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
+ * 快速Map对象，支持等值查询、范围查询、键值排序、键过期等功能
+ *
  * @author wanghuidong
  * 时间： 2022/6/26 10:10
  */
@@ -18,32 +19,37 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     /**
      * 主要运用于等值查找
      */
-    private HashMap<K, V> hashMap = new HashMap<>();
+    private final HashMap<K, V> hashMap = new HashMap<>();
 
     /**
      * 主要运用于范围查找
      */
-    private TreeMap<K, V> treeMap = new TreeMap<>();
+    private final TreeMap<K, V> treeMap = new TreeMap<>();
 
     /**
      * 按照时间顺序保存了会过期key集合，为了实现快速删除，结构：时间戳->key列表
      */
-    private TreeMap<Long, List<K>> expireKeysMap = new TreeMap<>();
+    private final TreeMap<Long, List<K>> expireKeysMap = new TreeMap<>();
 
     /**
      * 保存会过期key的过期时间
      */
-    private HashMap<K, Long> keyExpireMap = new HashMap<>();
+    private final HashMap<K, Long> keyExpireMap = new HashMap<>();
+
+    /**
+     * 键过期回调函数
+     */
+    private final HashMap<K, ExpireCallback<K, V>> keyExpireCallbackMap = new HashMap<>();
 
     /**
      * 是否启用排序（默认不启用）
      */
-    boolean enableSort = false;
+    private final boolean enableSort;
 
     /**
      * 是否启用数据过期功能（默认启用）
      */
-    boolean enableExpire = true;
+    private final boolean enableExpire;
 
     /**
      * The comparator used to maintain order in this tree map, or
@@ -53,7 +59,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
      */
     private final Comparator<? super K> comparator;
 
-    private ReentrantReadWriteLock readWriteLock = new ReentrantReadWriteLock();
+    private final ReentrantReadWriteLock readWriteLock = new ReentrantReadWriteLock();
 
     //数据写锁
     private final Lock writeLock = readWriteLock.writeLock();
@@ -61,13 +67,18 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     //数据读锁
     private final Lock readLock = readWriteLock.readLock();
 
-    private ReentrantReadWriteLock expireKeysReadWriteLock = new ReentrantReadWriteLock();
+    private final ReentrantReadWriteLock expireKeysReadWriteLock = new ReentrantReadWriteLock();
 
     //过期key写锁
     private final Lock expireKeysWriteLock = expireKeysReadWriteLock.writeLock();
 
     //过期key读锁
     private final Lock expireKeysReadLock = expireKeysReadWriteLock.readLock();
+
+    /**
+     * 定时执行服务
+     */
+    private ScheduledExecutorService scheduledExecutorService;
 
     private final static AtomicInteger nextSerialNumber = new AtomicInteger(0);
 
@@ -134,21 +145,13 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     public void init() {
         if (this.enableExpire) {
             //启用定时器，定时删除过期key,1秒后启动，定时1秒, 因为时间间隔计算基于nanoTime,比timer.schedule更靠谱
-            ScheduledExecutorService scheduledExecutorService = new ScheduledThreadPoolExecutor(1, new ThreadFactory() {
-                @Override
-                public Thread newThread(Runnable r) {
-                    Thread thread = new Thread(r);
-                    thread.setName("expireTask-" + serialNumber());
-                    thread.setDaemon(true);
-                    return thread;
-                }
+            scheduledExecutorService = new ScheduledThreadPoolExecutor(2, runnable -> {
+                Thread thread = new Thread(runnable);
+                thread.setName("expireTask-" + serialNumber());
+                thread.setDaemon(true);
+                return thread;
             });
-            scheduledExecutorService.scheduleWithFixedDelay(new Runnable() {
-                @Override
-                public void run() {
-                    removeExpireData("scheduledExecutorService");
-                }
-            }, 1, 1, TimeUnit.SECONDS);
+            scheduledExecutorService.scheduleWithFixedDelay(() -> clearExpireData("expireTask"), 1, 1, TimeUnit.SECONDS);
         }
     }
 
@@ -164,7 +167,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             throw new RuntimeException("未启用排序");
         }
         //先删除过期数据
-        this.removeExpireData("subMap");
+        this.clearExpireData("subMap");
         try {
             readLock.lock();
             SortedMap<K, V> sortedMap = this.treeMap.subMap(fromKey, toKey);
@@ -182,7 +185,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             throw new RuntimeException("未启用排序");
         }
         //先删除过期数据
-        this.removeExpireData("subMap");
+        this.clearExpireData("subMap");
         try {
             readLock.lock();
             SortedMap<K, V> sortedMap = this.treeMap.subMap(fromKey, fromInclusive, toKey, toInclusive);
@@ -200,7 +203,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             throw new RuntimeException("未启用排序");
         }
         //先删除过期数据
-        this.removeExpireData("headMap");
+        this.clearExpireData("headMap");
         try {
             readLock.lock();
             SortedMap<K, V> sortedMap = this.treeMap.headMap(toKey);
@@ -217,7 +220,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             throw new RuntimeException("未启用排序");
         }
         //先删除过期数据
-        this.removeExpireData("headMap");
+        this.clearExpireData("headMap");
         try {
             readLock.lock();
             SortedMap<K, V> sortedMap = this.treeMap.headMap(toKey, inclusive);
@@ -234,7 +237,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             throw new RuntimeException("未启用排序");
         }
         //先删除过期数据
-        this.removeExpireData("tailMap");
+        this.clearExpireData("tailMap");
         try {
             readLock.lock();
             SortedMap<K, V> sortedMap = this.treeMap.tailMap(fromKey);
@@ -251,7 +254,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             throw new RuntimeException("未启用排序");
         }
         //先删除过期数据
-        this.removeExpireData("tailMap");
+        this.clearExpireData("tailMap");
         try {
             readLock.lock();
             SortedMap<K, V> sortedMap = this.treeMap.tailMap(fromKey, inclusive);
@@ -268,7 +271,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             throw new RuntimeException("未启用排序");
         }
         //先删除过期数据
-        this.removeExpireData("firstKey");
+        this.clearExpireData("firstKey");
         try {
             readLock.lock();
             return this.treeMap.firstKey();
@@ -283,7 +286,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             throw new RuntimeException("未启用排序");
         }
         //先删除过期数据
-        this.removeExpireData("lastKey");
+        this.clearExpireData("lastKey");
         try {
             readLock.lock();
             return this.treeMap.lastKey();
@@ -295,7 +298,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     @Override
     public int size() {
         //先删除过期数据
-        this.removeExpireData("size");
+        this.clearExpireData("size");
         try {
             readLock.lock();
             return this.hashMap.size();
@@ -307,7 +310,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     @Override
     public boolean isEmpty() {
         //先删除过期数据
-        this.removeExpireData("isEmpty");
+        this.clearExpireData("isEmpty");
         try {
             readLock.lock();
             return this.hashMap.isEmpty();
@@ -319,7 +322,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     @Override
     public boolean containsKey(Object key) {
         //先删除过期数据
-        this.removeExpireData("containsKey");
+        this.clearExpireData("containsKey");
         try {
             readLock.lock();
             return this.hashMap.containsKey(key);
@@ -331,7 +334,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     @Override
     public boolean containsValue(Object value) {
         //先删除过期数据
-        this.removeExpireData("containsValue");
+        this.clearExpireData("containsValue");
         try {
             readLock.lock();
             return this.hashMap.containsValue(value);
@@ -343,7 +346,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     @Override
     public V get(Object key) {
         //先删除过期数据
-        this.removeExpireData("get");
+        this.clearExpireData("get");
         try {
             readLock.lock();
             return this.hashMap.get(key);
@@ -409,7 +412,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     @Override
     public Set<K> keySet() {
         //先删除过期数据
-        this.removeExpireData("keySet");
+        this.clearExpireData("keySet");
         try {
             readLock.lock();
             Set<K> keySet;
@@ -420,9 +423,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             }
 
             //直接返回，可能无法遍历（并发读写的时候抛ConcurrentModificationException异常），这里构造新的Set解决遍历问题
-            Set<K> keySetNew = new LinkedHashSet<>();
-            keySetNew.addAll(keySet);
-            return keySetNew;
+            return new LinkedHashSet<>(keySet);
         } finally {
             readLock.unlock();
         }
@@ -431,7 +432,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     @Override
     public Collection<V> values() {
         //先删除过期数据
-        this.removeExpireData("values");
+        this.clearExpireData("values");
         try {
             readLock.lock();
             Collection<V> coll;
@@ -441,9 +442,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
                 coll = this.hashMap.values();
             }
             //构造新的Collection，解决并发遍历问题
-            Collection<V> collNew = new ArrayList<>();
-            collNew.addAll(coll);
-            return collNew;
+            return new ArrayList<>(coll);
         } finally {
             readLock.unlock();
         }
@@ -452,7 +451,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     @Override
     public Set<Entry<K, V>> entrySet() {
         //先删除过期数据
-        this.removeExpireData("entrySet");
+        this.clearExpireData("entrySet");
         try {
             readLock.lock();
             Set<Map.Entry<K, V>> entrySet;
@@ -462,9 +461,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
                 entrySet = this.hashMap.entrySet();
             }
             //构造新的entrySet，解决并发遍历问题
-            Set<Map.Entry<K, V>> entrySetNew = new LinkedHashSet<>();
-            entrySetNew.addAll(entrySet);
-            return entrySetNew;
+            return new LinkedHashSet<>(entrySet);
         } finally {
             readLock.unlock();
         }
@@ -473,6 +470,11 @@ public class FastMap<K, V> implements IFastMap<K, V> {
 
     @Override
     public Long expire(K key, Long ms) {
+        return this.expire(key, ms, null);
+    }
+
+    @Override
+    public Long expire(K key, Long ms, ExpireCallback<K, V> callback) {
         if (!enableExpire) {
             throw new RuntimeException("未启用过期功能");
         }
@@ -482,6 +484,11 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             //判断是否已经设置过过期时间
             Long expireTime = this.keyExpireMap.get(key);
             if (expireTime != null) {
+                if (callback != null) {
+                    //清除之前设置的过期回调函数
+                    this.keyExpireCallbackMap.remove(key);
+                }
+
                 //清除之前设置的过期时间
                 this.keyExpireMap.remove(key);
                 List<K> keys = this.expireKeysMap.get(expireTime);
@@ -499,6 +506,13 @@ public class FastMap<K, V> implements IFastMap<K, V> {
                 this.expireKeysMap.put(expireTime, keys);
             } else {
                 keys.add(key);
+            }
+            if (callback != null) {
+                //设置的过期回调函数
+                this.keyExpireCallbackMap.put(key, callback);
+                //使用延时服务调用清理key的函数，可以及时调用过期回调函数
+                //同key重复调用，会产生多个延时任务，就是多次调用清理函数，但是不会产生多次回调，因为回调取决于过期时间和回调函数）
+                this.scheduledExecutorService.schedule(() -> FastMap.this.clearExpireData("keyExpireCallback"), ms, TimeUnit.MILLISECONDS);
             }
 
             //假定系统时间不修改前提下的过期时间
@@ -531,9 +545,13 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     }
 
     /**
-     * 删除过期的数据
+     * 清理过期的数据
+     * 调用时机：
+     * 1.调用FastMap相关查询接口
+     * 2.每秒定时调用
+     * 3.设置了过期回调函数的key的延时任务调用
      */
-    private void removeExpireData(String flag) {
+    private void clearExpireData(String flag) {
         if (!enableExpire) {
             return;
         }
@@ -545,7 +563,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             //过期时间在【从前至此刻】区间内的都为过期的key
             SortedMap<Long, List<K>> sortedMap = this.expireKeysMap.headMap(curTimestamp, true);
             expiredKeysMap.putAll(sortedMap);
-//            System.out.println(String.format("thread:%s caller:%s removeExpireData【curTime=%s,expiredKeysMap=%s】", Thread.currentThread().getName(), flag, curTimestamp, expiredKeysMap));
+            System.out.printf("time:%s,thread:%s caller:%s removeExpireData【jvmTime=%s,expiredKeysMap=%s】%n", new Date(), Thread.currentThread().getName(), flag, curTimestamp, expiredKeysMap);
         } finally {
             expireKeysReadLock.unlock();
         }
@@ -556,7 +574,23 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         for (Entry<Long, List<K>> entry : expiredKeysMap.entrySet()) {
             timeKeys.add(entry.getKey());
             for (K key : entry.getValue()) {
-                this.remove(key);
+                //删除数据
+                V val = this.remove(key);
+
+                //首次调用删除（val!=null，前提：val存储值都不为null）
+                if (val != null) {
+                    //如果存在过期回调函数，则执行回调
+                    ExpireCallback<K, V> callback;
+                    try {
+                        expireKeysReadLock.lock();
+                        callback = this.keyExpireCallbackMap.get(key);
+                    } finally {
+                        expireKeysReadLock.unlock();
+                    }
+                    if (callback != null) {
+                        callback.onExpire(key, val);
+                    }
+                }
 
                 keys.add(key);
             }
@@ -573,6 +607,8 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             for (K key : keys) {
                 //删除过期key的过期时间戳
                 this.keyExpireMap.remove(key);
+                //删除过期key的回调函数
+                this.keyExpireCallbackMap.remove(key);
             }
         } finally {
             expireKeysWriteLock.unlock();
@@ -582,12 +618,10 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     /**
      * 转换SortedMap为LinkedHashMap
      *
-     * @param sortedMap
-     * @return LinkedHashMap
+     * @param sortedMap 排序map
+     * @return LinkedHashMap 链接map
      */
     private Map<K, V> getLinkedMap(SortedMap<K, V> sortedMap) {
-        Map<K, V> linkedHashMap = new LinkedHashMap<>();
-        linkedHashMap.putAll(sortedMap);
-        return linkedHashMap;
+        return new LinkedHashMap<>(sortedMap);
     }
 }
