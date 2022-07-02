@@ -4,7 +4,7 @@ import java.util.Comparator;
 import java.util.Map;
 
 /**
- * 快速Map对象，支持等值查询、范围查询、键值排序、键过期等功能
+ * 一个支持等值查找、范围查找、数据过期、键排序等功能的线程安全Map，适合做本地缓存。
  *
  * @author wanghuidong
  * 时间： 2022/6/26 11:26
