@@ -571,7 +571,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             //过期时间在【从前至此刻】区间内的都为过期的key
             SortedMap<Long, List<K>> sortedMap = this.expireKeysMap.headMap(curTimestamp, true);
             expiredKeysMap.putAll(sortedMap);
-            System.out.printf("time:%s,thread:%s caller:%s removeExpireData【jvmTime=%s,expiredKeysMap=%s】%n", new Date(), Thread.currentThread().getName(), flag, curTimestamp, expiredKeysMap);
+//            System.out.printf("time:%s,thread:%s caller:%s removeExpireData【jvmTime=%s,expiredKeysMap=%s】%n", new Date(), Thread.currentThread().getName(), flag, curTimestamp, expiredKeysMap);
         } finally {
             expireKeysReadLock.unlock();
         }

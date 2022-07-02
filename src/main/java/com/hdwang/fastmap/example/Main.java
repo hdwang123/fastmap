@@ -1,19 +1,17 @@
-# fastmap
+package com.hdwang.fastmap.example;
 
-## 简介
+import com.hdwang.fastmap.ExpireCallback;
+import com.hdwang.fastmap.FastMap;
+import com.hdwang.fastmap.IFastMap;
 
-一个支持等值查找、范围查找、数据过期、键排序等功能的线程安全Map，适合做本地缓存。
+import java.util.Date;
 
-## 核心思想
-
-1.等值查找采用HashMap  
-2.范围查找采用TreeMap  
-3.数据过期实现：调用相关查询方法时清理过期Key + 定时（每秒）清理一遍过期Key + 过期回调延时任务调用清理Key  
-4.使用两个ReentrantReadWriteLock的读写锁实现线程安全，一个用于数据的CRUD，一个用于过期key的维护
-
-## 使用教程
-
-````
+/**
+ * 案例
+ *
+ * @author wanghuidong
+ * 时间： 2022/7/2 22:00
+ */
 public class Main {
 
     public static void main(String[] args) throws Exception {
@@ -64,4 +62,3 @@ public class Main {
         Thread.sleep(60 * 1000);
     }
 }
-````
