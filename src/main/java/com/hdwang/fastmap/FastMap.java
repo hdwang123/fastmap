@@ -17,14 +17,14 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 public class FastMap<K, V> implements IFastMap<K, V> {
 
     /**
-     * 主要运用于等值查找
+     * 保存数据，主要运用于等值查找
      */
-    private final HashMap<K, V> hashMap = new HashMap<>();
+    private final HashMap<K, V> dataHashMap = new HashMap<>();
 
     /**
-     * 主要运用于范围查找
+     * 保存数据，主要运用于范围查找
      */
-    private final TreeMap<K, V> treeMap = new TreeMap<>();
+    private TreeMap<K, V> dataTreeMap = null;
 
     /**
      * 按照时间顺序保存了会过期key集合，为了实现快速删除，结构：时间戳->key列表
@@ -37,7 +37,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     private final HashMap<K, Long> keyExpireMap = new HashMap<>();
 
     /**
-     * 键过期回调函数
+     * 保存键过期的回调函数
      */
     private final HashMap<K, ExpireCallback<K, V>> keyExpireCallbackMap = new HashMap<>();
 
@@ -143,6 +143,14 @@ public class FastMap<K, V> implements IFastMap<K, V> {
      * 初始化
      */
     public void init() {
+        //根据排序器初始化TreeMap
+        if (this.comparator == null) {
+            dataTreeMap = new TreeMap<>();
+        } else {
+            dataTreeMap = new TreeMap<>(this.comparator);
+        }
+
+        //启用数据过期功能
         if (this.enableExpire) {
             //启用定时器，定时删除过期key,1秒后启动，定时1秒, 因为时间间隔计算基于nanoTime,比timer.schedule更靠谱
             scheduledExecutorService = new ScheduledThreadPoolExecutor(2, runnable -> {
@@ -170,7 +178,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.clearExpireData("subMap");
         try {
             readLock.lock();
-            SortedMap<K, V> sortedMap = this.treeMap.subMap(fromKey, toKey);
+            SortedMap<K, V> sortedMap = this.dataTreeMap.subMap(fromKey, toKey);
 
             //转成LinkedHashMap，解决并发时的遍历问题
             return getLinkedMap(sortedMap);
@@ -188,7 +196,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.clearExpireData("subMap");
         try {
             readLock.lock();
-            SortedMap<K, V> sortedMap = this.treeMap.subMap(fromKey, fromInclusive, toKey, toInclusive);
+            SortedMap<K, V> sortedMap = this.dataTreeMap.subMap(fromKey, fromInclusive, toKey, toInclusive);
 
             //转成LinkedHashMap，解决并发时的遍历问题
             return getLinkedMap(sortedMap);
@@ -206,7 +214,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.clearExpireData("headMap");
         try {
             readLock.lock();
-            SortedMap<K, V> sortedMap = this.treeMap.headMap(toKey);
+            SortedMap<K, V> sortedMap = this.dataTreeMap.headMap(toKey);
             //转成LinkedHashMap，解决并发时的遍历问题
             return getLinkedMap(sortedMap);
         } finally {
@@ -223,7 +231,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.clearExpireData("headMap");
         try {
             readLock.lock();
-            SortedMap<K, V> sortedMap = this.treeMap.headMap(toKey, inclusive);
+            SortedMap<K, V> sortedMap = this.dataTreeMap.headMap(toKey, inclusive);
             //转成LinkedHashMap，解决并发时的遍历问题
             return getLinkedMap(sortedMap);
         } finally {
@@ -240,7 +248,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.clearExpireData("tailMap");
         try {
             readLock.lock();
-            SortedMap<K, V> sortedMap = this.treeMap.tailMap(fromKey);
+            SortedMap<K, V> sortedMap = this.dataTreeMap.tailMap(fromKey);
             //转成LinkedHashMap，解决并发时的遍历问题
             return getLinkedMap(sortedMap);
         } finally {
@@ -257,7 +265,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.clearExpireData("tailMap");
         try {
             readLock.lock();
-            SortedMap<K, V> sortedMap = this.treeMap.tailMap(fromKey, inclusive);
+            SortedMap<K, V> sortedMap = this.dataTreeMap.tailMap(fromKey, inclusive);
             //转成LinkedHashMap，解决并发时的遍历问题
             return getLinkedMap(sortedMap);
         } finally {
@@ -274,7 +282,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.clearExpireData("firstKey");
         try {
             readLock.lock();
-            return this.treeMap.firstKey();
+            return this.dataTreeMap.firstKey();
         } finally {
             readLock.unlock();
         }
@@ -289,7 +297,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.clearExpireData("lastKey");
         try {
             readLock.lock();
-            return this.treeMap.lastKey();
+            return this.dataTreeMap.lastKey();
         } finally {
             readLock.unlock();
         }
@@ -301,7 +309,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.clearExpireData("size");
         try {
             readLock.lock();
-            return this.hashMap.size();
+            return this.dataHashMap.size();
         } finally {
             readLock.unlock();
         }
@@ -313,7 +321,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.clearExpireData("isEmpty");
         try {
             readLock.lock();
-            return this.hashMap.isEmpty();
+            return this.dataHashMap.isEmpty();
         } finally {
             readLock.unlock();
         }
@@ -325,7 +333,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.clearExpireData("containsKey");
         try {
             readLock.lock();
-            return this.hashMap.containsKey(key);
+            return this.dataHashMap.containsKey(key);
         } finally {
             readLock.unlock();
         }
@@ -337,7 +345,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.clearExpireData("containsValue");
         try {
             readLock.lock();
-            return this.hashMap.containsValue(value);
+            return this.dataHashMap.containsValue(value);
         } finally {
             readLock.unlock();
         }
@@ -349,7 +357,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.clearExpireData("get");
         try {
             readLock.lock();
-            return this.hashMap.get(key);
+            return this.dataHashMap.get(key);
         } finally {
             readLock.unlock();
         }
@@ -359,9 +367,9 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     public V put(K key, V value) {
         try {
             writeLock.lock();
-            V val = this.hashMap.put(key, value);
+            V val = this.dataHashMap.put(key, value);
             if (enableSort) {
-                val = this.treeMap.put(key, value);
+                val = this.dataTreeMap.put(key, value);
             }
             return val;
         } finally {
@@ -373,9 +381,9 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     public V remove(Object key) {
         try {
             writeLock.lock();
-            V val = this.hashMap.remove(key);
+            V val = this.dataHashMap.remove(key);
             if (enableSort) {
-                val = this.treeMap.remove(key);
+                val = this.dataTreeMap.remove(key);
             }
             return val;
         } finally {
@@ -387,9 +395,9 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     public void putAll(Map<? extends K, ? extends V> m) {
         try {
             writeLock.lock();
-            this.hashMap.putAll(m);
+            this.dataHashMap.putAll(m);
             if (enableSort) {
-                this.treeMap.putAll(m);
+                this.dataTreeMap.putAll(m);
             }
         } finally {
             writeLock.unlock();
@@ -400,9 +408,9 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     public void clear() {
         try {
             writeLock.lock();
-            this.hashMap.clear();
+            this.dataHashMap.clear();
             if (enableSort) {
-                this.treeMap.clear();
+                this.dataTreeMap.clear();
             }
         } finally {
             writeLock.unlock();
@@ -417,9 +425,9 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             readLock.lock();
             Set<K> keySet;
             if (enableSort) {
-                keySet = this.treeMap.keySet();
+                keySet = this.dataTreeMap.keySet();
             } else {
-                keySet = this.hashMap.keySet();
+                keySet = this.dataHashMap.keySet();
             }
 
             //直接返回，可能无法遍历（并发读写的时候抛ConcurrentModificationException异常），这里构造新的Set解决遍历问题
@@ -437,9 +445,9 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             readLock.lock();
             Collection<V> coll;
             if (enableSort) {
-                coll = this.treeMap.values();
+                coll = this.dataTreeMap.values();
             } else {
-                coll = this.hashMap.values();
+                coll = this.dataHashMap.values();
             }
             //构造新的Collection，解决并发遍历问题
             return new ArrayList<>(coll);
@@ -456,9 +464,9 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             readLock.lock();
             Set<Map.Entry<K, V>> entrySet;
             if (enableSort) {
-                entrySet = this.treeMap.entrySet();
+                entrySet = this.dataTreeMap.entrySet();
             } else {
-                entrySet = this.hashMap.entrySet();
+                entrySet = this.dataHashMap.entrySet();
             }
             //构造新的entrySet，解决并发遍历问题
             return new LinkedHashSet<>(entrySet);
