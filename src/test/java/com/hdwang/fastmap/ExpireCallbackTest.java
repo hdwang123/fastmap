@@ -19,7 +19,8 @@ public class ExpireCallbackTest {
         Long expireTime = fastMap.expire(key, 5000L, new ExpireCallback() {
             @Override
             public void onExpire(Object key, Object val) {
-                System.out.println(String.format("time:%s,ExpireCallback:key=%s,val=%s,curTime=%s", new Date(), key, val, System.currentTimeMillis()));
+                System.out.println(String.format("time:%s,thread:%s,ExpireCallback:key=%s,val=%s,curTime=%s",
+                        new Date(), Thread.currentThread().getName(), key, val, System.currentTimeMillis()));
             }
         });
         System.out.println(String.format("time:%s,expire:key=%s,expireTime=%s", new Date(), key, expireTime));
@@ -31,11 +32,12 @@ public class ExpireCallbackTest {
         expireTime = fastMap.expire(key, 10000L, new ExpireCallback() {
             @Override
             public void onExpire(Object key, Object val) {
-                System.out.println(String.format("time:%s,ExpireCallback:key=%s,val=%s,curTime=%s", new Date(), key, val, System.currentTimeMillis()));
+                System.out.println(String.format("time:%s,thread:%s,ExpireCallback:key=%s,val=%s,curTime=%s",
+                        new Date(), Thread.currentThread().getName(), key, val, System.currentTimeMillis()));
             }
         });
         System.out.println(String.format("time:%s,expire:key=%s,expireTime=%s", new Date(), key, expireTime));
-        expireTime = fastMap.expire(key,20500L);
+        expireTime = fastMap.expire(key, 20500L);
         System.out.println(String.format("time:%s,expire:key=%s,expireTime=%s", new Date(), key, expireTime));
 
         try {
