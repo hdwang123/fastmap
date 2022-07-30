@@ -1,8 +1,7 @@
 package com.hdwang.fastmap;
 
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 、
@@ -24,6 +23,9 @@ public class SceneTest {
         //过期时间设置1分钟
         Long expireTime = fastMap.expire(phone, 1 * 60 * 1000L);
         System.out.println("过期时间；" + expireTime);
+
+        //是否超出限制标识
+        AtomicBoolean beyondLimitFlag = new AtomicBoolean(false);
 
         //=============模拟请求日志插入================
         while (true) {
@@ -53,6 +55,7 @@ public class SceneTest {
                     System.out.println("未超出1分钟限制，插入key=" + time + ",value=" + value);
                 } else {
                     System.out.println("超出1分钟限制，不再插入请求记录");
+                    beyondLimitFlag.set(true);
                 }
                 return v;
             });
