@@ -2,6 +2,7 @@ package com.hdwang.fastmap;
 
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collector;
 
 /**
  * 、
@@ -13,7 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class SceneTest {
 
     public static void main(String[] args) throws Exception {
-        //场景：手机号请求频率限制：1分钟2次，5分钟5次
+        //场景：手机号请求频率限制：1分钟2次，5分钟10次
         IFastMap<String, IFastMap<Long, Long>> fastMap = new FastMap<>(true);
 
 
@@ -43,15 +44,22 @@ public class SceneTest {
                 Long startTime = nowTime - 1 * 60 * 1000L;
                 Map<Long, Long> subMap = v.subMap(startTime, true, nowTime, true);
                 System.out.println("phone:" + phone + ",one minute subMap:" + subMap);
-                long oneMinuteCount = subMap.size();
+                long oneMinuteCount = subMap.values().stream().reduce(Long::sum).orElse(0L);
                 System.out.println("oneMinuteCount:" + oneMinuteCount);
 
                 //2.未超出限制，方可以插入值
                 if (oneMinuteCount < 2) {
                     //插入值
                     Long time = nowTime;
-                    Long value = 1L;
-                    v.put(nowTime, value);
+                    //存在毫秒级重复值可能（时间：次数）
+                    Long value = v.compute(nowTime, (key, val) -> {
+                        if (val == null) {
+                            val = 1L; //首次插入计数开始
+                        } else {
+                            val++; //第二次，第三次....
+                        }
+                        return val;
+                    });
                     System.out.println("未超出1分钟限制，插入key=" + time + ",value=" + value);
                 } else {
                     System.out.println("超出1分钟限制，不再插入请求记录");
