@@ -7,6 +7,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 /**
  * 一个支持等值查找、范围查找、数据过期、键排序等功能的线程安全Map，适合做本地缓存。
@@ -499,6 +502,223 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             return new LinkedHashSet<>(entrySet);
         } finally {
             dataReadLock.unlock();
+        }
+    }
+
+    @Override
+    public V getOrDefault(Object key, V defaultValue) {
+        try {
+            dataReadLock.lock();
+            V v;
+            return (((v = get(key)) != null) || containsKey(key))
+                    ? v
+                    : defaultValue;
+        } finally {
+            dataReadLock.unlock();
+        }
+    }
+
+    @Override
+    public void forEach(BiConsumer<? super K, ? super V> action) {
+        try {
+            dataReadLock.lock();
+            Objects.requireNonNull(action);
+            for (Map.Entry<K, V> entry : entrySet()) {
+                K k;
+                V v;
+                try {
+                    k = entry.getKey();
+                    v = entry.getValue();
+                } catch (IllegalStateException ise) {
+                    // this usually means the entry is no longer in the map.
+                    throw new ConcurrentModificationException(ise);
+                }
+                action.accept(k, v);
+            }
+        } finally {
+            dataReadLock.unlock();
+        }
+    }
+
+    @Override
+    public void replaceAll(BiFunction<? super K, ? super V, ? extends V> function) {
+        try {
+            dataWriteLock.lock();
+            Objects.requireNonNull(function);
+            for (Map.Entry<K, V> entry : entrySet()) {
+                K k;
+                V v;
+                try {
+                    k = entry.getKey();
+                    v = entry.getValue();
+                } catch (IllegalStateException ise) {
+                    // this usually means the entry is no longer in the map.
+                    throw new ConcurrentModificationException(ise);
+                }
+
+                // ise thrown from function is not a cme.
+                v = function.apply(k, v);
+
+                try {
+                    entry.setValue(v);
+                } catch (IllegalStateException ise) {
+                    // this usually means the entry is no longer in the map.
+                    throw new ConcurrentModificationException(ise);
+                }
+            }
+        } finally {
+            dataWriteLock.unlock();
+        }
+    }
+
+    @Override
+    public V putIfAbsent(K key, V value) {
+        try {
+            dataWriteLock.lock();
+            V v = get(key);
+            if (v == null) {
+                v = put(key, value);
+            }
+            return v;
+        } finally {
+            dataWriteLock.unlock();
+        }
+    }
+
+    @Override
+    public boolean remove(Object key, Object value) {
+        try {
+            dataWriteLock.lock();
+            Object curValue = get(key);
+            if (!Objects.equals(curValue, value) ||
+                    (curValue == null && !containsKey(key))) {
+                return false;
+            }
+            remove(key);
+            return true;
+        } finally {
+            dataWriteLock.unlock();
+        }
+    }
+
+    @Override
+    public boolean replace(K key, V oldValue, V newValue) {
+        try {
+            dataWriteLock.lock();
+            Object curValue = get(key);
+            if (!Objects.equals(curValue, oldValue) ||
+                    (curValue == null && !containsKey(key))) {
+                return false;
+            }
+            put(key, newValue);
+            return true;
+        } finally {
+            dataWriteLock.unlock();
+        }
+    }
+
+    @Override
+    public V replace(K key, V value) {
+        try {
+            dataWriteLock.lock();
+            V curValue;
+            if (((curValue = get(key)) != null) || containsKey(key)) {
+                curValue = put(key, value);
+            }
+            return curValue;
+        } finally {
+            dataWriteLock.unlock();
+        }
+    }
+
+    @Override
+    public V computeIfAbsent(K key, Function<? super K, ? extends V> mappingFunction) {
+        try {
+            dataWriteLock.lock();
+            Objects.requireNonNull(mappingFunction);
+            V v;
+            if ((v = get(key)) == null) {
+                V newValue;
+                if ((newValue = mappingFunction.apply(key)) != null) {
+                    put(key, newValue);
+                    return newValue;
+                }
+            }
+
+            return v;
+        } finally {
+            dataWriteLock.unlock();
+        }
+    }
+
+    @Override
+    public V computeIfPresent(K key, BiFunction<? super K, ? super V, ? extends V> remappingFunction) {
+        try {
+            dataWriteLock.lock();
+            Objects.requireNonNull(remappingFunction);
+            V oldValue;
+            if ((oldValue = get(key)) != null) {
+                V newValue = remappingFunction.apply(key, oldValue);
+                if (newValue != null) {
+                    put(key, newValue);
+                    return newValue;
+                } else {
+                    remove(key);
+                    return null;
+                }
+            } else {
+                return null;
+            }
+        } finally {
+            dataWriteLock.unlock();
+        }
+    }
+
+    @Override
+    public V compute(K key, BiFunction<? super K, ? super V, ? extends V> remappingFunction) {
+        try {
+            dataWriteLock.lock();
+            Objects.requireNonNull(remappingFunction);
+            V oldValue = get(key);
+
+            V newValue = remappingFunction.apply(key, oldValue);
+            if (newValue == null) {
+                // delete mapping
+                if (oldValue != null || containsKey(key)) {
+                    // something to remove
+                    remove(key);
+                    return null;
+                } else {
+                    // nothing to do. Leave things as they were.
+                    return null;
+                }
+            } else {
+                // add or replace old mapping
+                put(key, newValue);
+                return newValue;
+            }
+        } finally {
+            dataWriteLock.unlock();
+        }
+    }
+
+    @Override
+    public V merge(K key, V value, BiFunction<? super V, ? super V, ? extends V> remappingFunction) {
+        try {
+            dataWriteLock.lock();
+            Objects.requireNonNull(remappingFunction);
+            Objects.requireNonNull(value);
+            V oldValue = get(key);
+            V newValue = (oldValue == null) ? value :
+                    remappingFunction.apply(oldValue, value);
+            if (newValue == null) {
+                remove(key);
+            } else {
+                put(key, newValue);
+            }
+            return newValue;
+        } finally {
+            dataWriteLock.unlock();
         }
     }
 
