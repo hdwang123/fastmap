@@ -9,7 +9,13 @@
 1.等值查找采用HashMap  
 2.范围查找采用TreeMap  
 3.数据过期实现：调用相关查询方法时清理过期Key + 定时（每秒）清理一遍过期Key + 过期回调延时任务调用清理Key  
-4.使用两个ReentrantReadWriteLock的读写锁实现线程安全，一个用于数据的CRUD，一个用于过期key的维护
+4.使用统一的ReentrantReadWriteLock保护数据、排序索引和过期元数据，保证复合操作的原子一致性。
+
+## 使用约束
+
+1.启用排序时，Key必须可比较，或者在构造时传入Comparator。
+2.Comparator必须与equals保持一致；如果Comparator将两个不同Key判断为相等，FastMap会拒绝写入。
+3.keySet、values和entrySet支持通过remove、clear及Iterator.remove修改原Map；entrySet中的Entry.setValue会安全写回原Map。
 
 ## 使用教程
 

@@ -40,17 +40,14 @@ public class FastMapThreadSafetyTest {
     }
 
     @Test
-    public void entrySetMustNotExposeMutableInternalEntries() {
+    public void entrySetMustWriteThroughWithoutBreakingIndexes() {
         FastMap<Integer, Integer> map = new FastMap<>(false, true);
         map.put(1, 10);
         Map.Entry<Integer, Integer> entry = map.entrySet().iterator().next();
 
-        try {
-            entry.setValue(99);
-            fail("entrySet snapshot must not mutate internal state");
-        } catch (UnsupportedOperationException expected) {
-            assertEquals(Integer.valueOf(10), map.get(1));
-        }
+        assertEquals(Integer.valueOf(10), entry.setValue(99));
+        assertEquals(Integer.valueOf(99), map.get(1));
+        assertEquals(Integer.valueOf(99), map.subMap(1, 2).get(1));
     }
 
     @Test

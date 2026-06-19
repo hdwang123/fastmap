@@ -92,7 +92,7 @@ public interface IFastMap<K, V> extends Map<K, V> {
      *
      * @param key 指定Key
      * @param ms  指定毫秒数后过期
-     * @return 具体的过期时刻
+     * @return 具体的过期时刻；key不存在时返回null
      */
     Long expire(K key, Long ms);
 
@@ -105,7 +105,7 @@ public interface IFastMap<K, V> extends Map<K, V> {
      * @param key      指定key
      * @param ms       指定毫秒数后过期
      * @param callback 过期回调函数
-     * @return 具体的过期时刻
+     * @return 具体的过期时刻；key不存在时返回null
      */
     Long expire(K key, Long ms, ExpireCallback<K, V> callback);
 
@@ -113,7 +113,7 @@ public interface IFastMap<K, V> extends Map<K, V> {
      * 获取Key的存活时间
      *
      * @param key 指定Key
-     * @return 存活时间（还有多少毫秒时间存活,NULL表示key不存在或过期时间未设置，负数表示已经过期的毫秒数）
+     * @return 存活时间（还有多少毫秒时间存活，NULL表示key不存在、已经过期或未设置过期时间）
      */
     Long ttl(K key);
 

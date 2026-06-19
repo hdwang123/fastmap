@@ -1,10 +1,13 @@
 package com.hdwang.fastmap;
 
 import java.util.*;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.lang.ref.WeakReference;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -23,7 +26,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     /**
      * 保存数据，主要运用于等值查找
      */
-    private final HashMap<K, V> dataHashMap = new HashMap<>();
+    private HashMap<K, V> dataHashMap = new HashMap<>();
 
     /**
      * 保存数据，主要运用于范围查找
@@ -44,6 +47,11 @@ public class FastMap<K, V> implements IFastMap<K, V> {
      * 保存键过期的回调函数
      */
     private final HashMap<K, ExpireCallback<K, V>> keyExpireCallbackMap = new HashMap<>();
+
+    /**
+     * 保存带回调过期任务，续期或删除时取消旧任务。
+     */
+    private final HashMap<K, ScheduledFuture<?>> keyExpireFutureMap = new HashMap<>();
 
     /**
      * 是否启用排序（默认不启用）
@@ -74,12 +82,13 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     /**
      * 定时执行服务(全局共享线程池)
      */
-    private static volatile ScheduledExecutorService scheduledExecutorService;
+    private static volatile ScheduledThreadPoolExecutor scheduledExecutorService;
 
     /**
      * 保存所有的启用过期功能的FastMap实例, 用于定期清理过期数据
      */
-    private static final List<FastMap<?, ?>> allExpirableFastMaps = new CopyOnWriteArrayList<>();
+    private static final List<WeakReference<FastMap<?, ?>>> allExpirableFastMaps =
+            new CopyOnWriteArrayList<>();
 
     /**
      * 定期清理过期数据线程编号
@@ -90,6 +99,23 @@ public class FastMap<K, V> implements IFastMap<K, V> {
      * 过期回调线程编号
      */
     private final static AtomicInteger callbackThreadNumber = new AtomicInteger(0);
+
+    /**
+     * 受控的过期回调线程池，避免大量数据同时过期时无限创建线程。
+     */
+    private static final ThreadPoolExecutor callbackExecutor = new ThreadPoolExecutor(
+            1,
+            Math.max(2, Runtime.getRuntime().availableProcessors()),
+            60L,
+            TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(1024),
+            runnable -> {
+                Thread thread = new Thread(runnable);
+                thread.setName("expireCallbackThread-" + callbackThreadNumber.getAndIncrement());
+                thread.setDaemon(true);
+                return thread;
+            },
+            new ThreadPoolExecutor.CallerRunsPolicy());
 
     /**
      * 100万，1毫秒=100万纳秒
@@ -103,7 +129,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.comparator = null;
         this.enableSort = false;
         this.enableExpire = true;
-        this.init();
+        this.initialize();
     }
 
     /**
@@ -115,7 +141,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.comparator = null;
         this.enableSort = false;
         this.enableExpire = enableExpire;
-        this.init();
+        this.initialize();
     }
 
     /**
@@ -128,7 +154,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.comparator = null;
         this.enableExpire = enableExpire;
         this.enableSort = enableSort;
-        this.init();
+        this.initialize();
     }
 
     /**
@@ -141,24 +167,19 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         this.enableExpire = enableExpire;
         this.comparator = comparator;
         this.enableSort = true;
-        this.init();
+        this.initialize();
     }
 
     /**
      * 初始化
      */
-    public void init() {
-        //根据排序器初始化TreeMap
-        if (this.comparator == null) {
-            dataTreeMap = new TreeMap<>();
-        } else {
-            dataTreeMap = new TreeMap<>(this.comparator);
-        }
+    private void initialize() {
+        dataTreeMap = newTreeMap();
 
         //启用数据过期功能
         if (this.enableExpire) {
             //保存 启用过期功能的FastMap 实例
-            allExpirableFastMaps.add(this);
+            allExpirableFastMaps.add(new WeakReference<>(this));
 
             //双重校验构造一个单例的scheduledExecutorService
             if (scheduledExecutorService == null) {
@@ -171,12 +192,22 @@ public class FastMap<K, V> implements IFastMap<K, V> {
                             thread.setDaemon(true);
                             return thread;
                         });
+                        scheduledExecutorService.setRemoveOnCancelPolicy(true);
 //                        System.out.println("ScheduledExecutorService created.");
 
                         //执行定期清理过期数据任务,清理所有FastMap实例中的过期数据
                         scheduledExecutorService.scheduleWithFixedDelay(() -> {
-                            for (FastMap<?, ?> map : allExpirableFastMaps) {
-                                map.clearExpireData("expireTask");
+                            for (WeakReference<FastMap<?, ?>> reference : allExpirableFastMaps) {
+                                FastMap<?, ?> map = reference.get();
+                                if (map == null) {
+                                    allExpirableFastMaps.remove(reference);
+                                    continue;
+                                }
+                                try {
+                                    map.clearExpireData("expireTask");
+                                } catch (Throwable throwable) {
+                                    reportBackgroundFailure("expire cleanup failed", throwable);
+                                }
                             }
                         }, 1, 1, TimeUnit.SECONDS);
                     }
@@ -390,11 +421,27 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     public V put(K key, V value) {
         try {
             dataWriteLock.lock();
-            V val = this.dataHashMap.put(key, value);
-            if (enableSort) {
-                val = this.dataTreeMap.put(key, value);
+            if (!enableSort) {
+                return this.dataHashMap.put(key, value);
             }
-            return val;
+
+            validateSortedKey(this.dataHashMap, key);
+            boolean treeContainedKey = this.dataTreeMap.containsKey(key);
+            V previousTreeValue = this.dataTreeMap.put(key, value);
+            try {
+                return this.dataHashMap.put(key, value);
+            } catch (RuntimeException | Error failure) {
+                try {
+                    if (treeContainedKey) {
+                        this.dataTreeMap.put(key, previousTreeValue);
+                    } else {
+                        this.dataTreeMap.remove(key);
+                    }
+                } catch (RuntimeException | Error rollbackFailure) {
+                    failure.addSuppressed(rollbackFailure);
+                }
+                throw failure;
+            }
         } finally {
             dataWriteLock.unlock();
         }
@@ -404,14 +451,35 @@ public class FastMap<K, V> implements IFastMap<K, V> {
     public V remove(Object key) {
         try {
             dataWriteLock.lock();
-            V val = this.dataHashMap.remove(key);
-            if (enableSort) {
-                this.dataTreeMap.remove(key);
+            if (!enableSort) {
+                V value = this.dataHashMap.remove(key);
+                if (enableExpire) {
+                    removeExpireMetadata(key);
+                }
+                return value;
+            }
+
+            boolean treeContainedKey = this.dataTreeMap.containsKey(key);
+            V previousTreeValue = this.dataTreeMap.remove(key);
+            V value;
+            try {
+                value = this.dataHashMap.remove(key);
+            } catch (RuntimeException | Error failure) {
+                try {
+                    if (treeContainedKey) {
+                        @SuppressWarnings("unchecked")
+                        K typedKey = (K) key;
+                        this.dataTreeMap.put(typedKey, previousTreeValue);
+                    }
+                } catch (RuntimeException | Error rollbackFailure) {
+                    failure.addSuppressed(rollbackFailure);
+                }
+                throw failure;
             }
             if (enableExpire) {
                 removeExpireMetadata(key);
             }
-            return val;
+            return value;
         } finally {
             dataWriteLock.unlock();
         }
@@ -419,12 +487,25 @@ public class FastMap<K, V> implements IFastMap<K, V> {
 
     @Override
     public void putAll(Map<? extends K, ? extends V> m) {
+        Objects.requireNonNull(m, "map");
         try {
             dataWriteLock.lock();
-            this.dataHashMap.putAll(m);
-            if (enableSort) {
-                this.dataTreeMap.putAll(m);
+            if (!enableSort) {
+                this.dataHashMap.putAll(m);
+                return;
             }
+
+            HashMap<K, V> newHashMap = new HashMap<>(this.dataHashMap);
+            TreeMap<K, V> newTreeMap = newTreeMap();
+            newTreeMap.putAll(this.dataTreeMap);
+            for (Map.Entry<? extends K, ? extends V> entry : m.entrySet()) {
+                K key = entry.getKey();
+                validateSortedKey(newHashMap, key);
+                newTreeMap.put(key, entry.getValue());
+                newHashMap.put(key, entry.getValue());
+            }
+            this.dataHashMap = newHashMap;
+            this.dataTreeMap = newTreeMap;
         } finally {
             dataWriteLock.unlock();
         }
@@ -439,9 +520,13 @@ public class FastMap<K, V> implements IFastMap<K, V> {
                 this.dataTreeMap.clear();
             }
             if (enableExpire) {
+                for (ScheduledFuture<?> future : this.keyExpireFutureMap.values()) {
+                    future.cancel(false);
+                }
                 this.expireKeysMap.clear();
                 this.keyExpireMap.clear();
                 this.keyExpireCallbackMap.clear();
+                this.keyExpireFutureMap.clear();
             }
         } finally {
             dataWriteLock.unlock();
@@ -450,58 +535,17 @@ public class FastMap<K, V> implements IFastMap<K, V> {
 
     @Override
     public Set<K> keySet() {
-        //先删除过期数据
-        this.clearExpireData("keySet");
-        try {
-            dataReadLock.lock();
-            Set<K> keySet;
-            if (enableSort) {
-                keySet = this.dataTreeMap.keySet();
-            } else {
-                keySet = this.dataHashMap.keySet();
-            }
-
-            //直接返回，可能无法遍历（并发读写的时候抛ConcurrentModificationException异常），这里构造新的Set解决遍历问题
-            return new LinkedHashSet<>(keySet);
-        } finally {
-            dataReadLock.unlock();
-        }
+        return new KeySetView();
     }
 
     @Override
     public Collection<V> values() {
-        //先删除过期数据
-        this.clearExpireData("values");
-        try {
-            dataReadLock.lock();
-            Collection<V> coll;
-            if (enableSort) {
-                coll = this.dataTreeMap.values();
-            } else {
-                coll = this.dataHashMap.values();
-            }
-            //构造新的Collection，解决并发遍历问题
-            return new ArrayList<>(coll);
-        } finally {
-            dataReadLock.unlock();
-        }
+        return new ValuesView();
     }
 
     @Override
     public Set<Entry<K, V>> entrySet() {
-        //先删除过期数据
-        this.clearExpireData("entrySet");
-        try {
-            dataReadLock.lock();
-            Map<K, V> source = enableSort ? this.dataTreeMap : this.dataHashMap;
-            Set<Map.Entry<K, V>> result = new LinkedHashSet<>();
-            for (Map.Entry<K, V> entry : source.entrySet()) {
-                result.add(new AbstractMap.SimpleImmutableEntry<>(entry));
-            }
-            return result;
-        } finally {
-            dataReadLock.unlock();
-        }
+        return new EntrySetView();
     }
 
     @Override
@@ -718,12 +762,14 @@ public class FastMap<K, V> implements IFastMap<K, V> {
 
             //判断是否已经设置过过期时间
             Long expireTime = this.keyExpireMap.get(key);
+            ExpireCallback<K, V> effectiveCallback = callback != null
+                    ? callback
+                    : this.keyExpireCallbackMap.get(key);
+            ScheduledFuture<?> previousFuture = this.keyExpireFutureMap.remove(key);
+            if (previousFuture != null) {
+                previousFuture.cancel(false);
+            }
             if (expireTime != null) {
-                if (callback != null) {
-                    //清除之前设置的过期回调函数
-                    this.keyExpireCallbackMap.remove(key);
-                }
-
                 //清除之前设置的过期时间
                 this.keyExpireMap.remove(key);
                 List<K> keys = this.expireKeysMap.get(expireTime);
@@ -735,7 +781,7 @@ public class FastMap<K, V> implements IFastMap<K, V> {
                 }
             }
             //使用nanoTime消除系统时间的影响，转成毫秒存储降低timeKey数量,过期时间精确到毫秒级别
-            expireTime = (System.nanoTime() / ONE_MILLION + ms);
+            expireTime = saturatedAdd(System.nanoTime() / ONE_MILLION, ms);
             this.keyExpireMap.put(key, expireTime);
             List<K> keys = this.expireKeysMap.get(expireTime);
             if (keys == null) {
@@ -745,16 +791,27 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             } else {
                 keys.add(key);
             }
-            if (callback != null) {
+            if (effectiveCallback != null) {
                 //设置的过期回调函数
-                this.keyExpireCallbackMap.put(key, callback);
-                //使用延时服务调用清理key的函数，可以及时调用过期回调函数
-                //同key重复调用，会产生多个延时任务，就是多次调用清理函数，但是不会产生多次回调，因为回调取决于过期时间和回调函数）
-                this.scheduledExecutorService.schedule(() -> clearExpireData("keyExpireCallback"), ms, TimeUnit.MILLISECONDS);
+                this.keyExpireCallbackMap.put(key, effectiveCallback);
+                WeakReference<FastMap<K, V>> mapReference = new WeakReference<>(this);
+                ScheduledFuture<?> future = this.scheduledExecutorService.schedule(() -> {
+                    FastMap<K, V> map = mapReference.get();
+                    if (map != null) {
+                        try {
+                            map.clearExpireData("keyExpireCallback");
+                        } catch (Throwable throwable) {
+                            reportBackgroundFailure("key expiration cleanup failed", throwable);
+                        }
+                    }
+                }, ms, TimeUnit.MILLISECONDS);
+                this.keyExpireFutureMap.put(key, future);
+            } else {
+                this.keyExpireCallbackMap.remove(key);
             }
 
             //假定系统时间不修改前提下的过期时间
-            return System.currentTimeMillis() + ms;
+            return saturatedAdd(System.currentTimeMillis(), ms);
         } finally {
             dataWriteLock.unlock();
         }
@@ -814,6 +871,10 @@ public class FastMap<K, V> implements IFastMap<K, V> {
                         this.dataTreeMap.remove(key);
                     }
                     ExpireCallback<K, V> callback = this.keyExpireCallbackMap.remove(key);
+                    ScheduledFuture<?> future = this.keyExpireFutureMap.remove(key);
+                    if (future != null) {
+                        future.cancel(false);
+                    }
                     this.keyExpireMap.remove(key);
                     if (existed && callback != null) {
                         expiredEntries.add(new ExpiredEntry<>(key, value, callback));
@@ -826,16 +887,21 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         }
 
         for (ExpiredEntry<K, V> entry : expiredEntries) {
-            String threadName = "expireCallbackThread" + callbackThreadNumber.getAndIncrement();
-            Thread callbackThread = new Thread(
-                    () -> entry.callback.onExpire(entry.key, entry.value),
-                    threadName);
-            callbackThread.setDaemon(true);
-            callbackThread.start();
+            callbackExecutor.execute(() -> {
+                try {
+                    entry.callback.onExpire(entry.key, entry.value);
+                } catch (Throwable throwable) {
+                    reportBackgroundFailure("expiration callback failed", throwable);
+                }
+            });
         }
     }
 
     private void removeExpireMetadata(Object key) {
+        ScheduledFuture<?> future = this.keyExpireFutureMap.remove(key);
+        if (future != null) {
+            future.cancel(false);
+        }
         Long expireTime = this.keyExpireMap.remove(key);
         this.keyExpireCallbackMap.remove(key);
         if (expireTime == null) {
@@ -850,6 +916,212 @@ public class FastMap<K, V> implements IFastMap<K, V> {
         }
     }
 
+    private List<Map.Entry<K, V>> entrySnapshot() {
+        clearExpireData("entrySnapshot");
+        try {
+            dataReadLock.lock();
+            Map<K, V> source = enableSort ? dataTreeMap : dataHashMap;
+            List<Map.Entry<K, V>> snapshot = new ArrayList<>(source.size());
+            for (Map.Entry<K, V> entry : source.entrySet()) {
+                snapshot.add(new AbstractMap.SimpleImmutableEntry<>(entry));
+            }
+            return snapshot;
+        } finally {
+            dataReadLock.unlock();
+        }
+    }
+
+    private abstract class SnapshotIterator<T> implements Iterator<T> {
+        private final Iterator<Map.Entry<K, V>> iterator = entrySnapshot().iterator();
+        private K currentKey;
+        private boolean canRemove;
+
+        @Override
+        public boolean hasNext() {
+            return iterator.hasNext();
+        }
+
+        protected Map.Entry<K, V> nextEntry() {
+            Map.Entry<K, V> entry = iterator.next();
+            currentKey = entry.getKey();
+            canRemove = true;
+            return entry;
+        }
+
+        @Override
+        public void remove() {
+            if (!canRemove) {
+                throw new IllegalStateException();
+            }
+            FastMap.this.remove(currentKey);
+            canRemove = false;
+        }
+    }
+
+    private final class KeySetView extends AbstractSet<K> {
+        @Override
+        public Iterator<K> iterator() {
+            return new SnapshotIterator<K>() {
+                @Override
+                public K next() {
+                    return nextEntry().getKey();
+                }
+            };
+        }
+
+        @Override
+        public int size() {
+            return FastMap.this.size();
+        }
+
+        @Override
+        public boolean contains(Object key) {
+            return FastMap.this.containsKey(key);
+        }
+
+        @Override
+        public boolean remove(Object key) {
+            boolean existed = FastMap.this.containsKey(key);
+            if (existed) {
+                FastMap.this.remove(key);
+            }
+            return existed;
+        }
+
+        @Override
+        public void clear() {
+            FastMap.this.clear();
+        }
+    }
+
+    private final class ValuesView extends AbstractCollection<V> {
+        @Override
+        public Iterator<V> iterator() {
+            return new SnapshotIterator<V>() {
+                @Override
+                public V next() {
+                    return nextEntry().getValue();
+                }
+            };
+        }
+
+        @Override
+        public int size() {
+            return FastMap.this.size();
+        }
+
+        @Override
+        public boolean contains(Object value) {
+            return FastMap.this.containsValue(value);
+        }
+
+        @Override
+        public boolean remove(Object value) {
+            for (Map.Entry<K, V> entry : entrySnapshot()) {
+                if (Objects.equals(entry.getValue(), value)
+                        && FastMap.this.remove(entry.getKey(), entry.getValue())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        @Override
+        public void clear() {
+            FastMap.this.clear();
+        }
+    }
+
+    private final class EntrySetView extends AbstractSet<Map.Entry<K, V>> {
+        @Override
+        public Iterator<Map.Entry<K, V>> iterator() {
+            return new SnapshotIterator<Map.Entry<K, V>>() {
+                @Override
+                public Map.Entry<K, V> next() {
+                    Map.Entry<K, V> entry = nextEntry();
+                    return new WriteThroughEntry(entry.getKey(), entry.getValue());
+                }
+            };
+        }
+
+        @Override
+        public int size() {
+            return FastMap.this.size();
+        }
+
+        @Override
+        public boolean contains(Object object) {
+            if (!(object instanceof Map.Entry)) {
+                return false;
+            }
+            Map.Entry<?, ?> entry = (Map.Entry<?, ?>) object;
+            Object value = FastMap.this.get(entry.getKey());
+            return Objects.equals(value, entry.getValue())
+                    && (value != null || FastMap.this.containsKey(entry.getKey()));
+        }
+
+        @Override
+        public boolean remove(Object object) {
+            if (!(object instanceof Map.Entry)) {
+                return false;
+            }
+            Map.Entry<?, ?> entry = (Map.Entry<?, ?>) object;
+            return FastMap.this.remove(entry.getKey(), entry.getValue());
+        }
+
+        @Override
+        public void clear() {
+            FastMap.this.clear();
+        }
+    }
+
+    private final class WriteThroughEntry implements Map.Entry<K, V> {
+        private final K key;
+        private V value;
+
+        private WriteThroughEntry(K key, V value) {
+            this.key = key;
+            this.value = value;
+        }
+
+        @Override
+        public K getKey() {
+            return key;
+        }
+
+        @Override
+        public V getValue() {
+            return value;
+        }
+
+        @Override
+        public V setValue(V value) {
+            V previous = FastMap.this.put(key, value);
+            this.value = value;
+            return previous;
+        }
+
+        @Override
+        public boolean equals(Object object) {
+            if (!(object instanceof Map.Entry)) {
+                return false;
+            }
+            Map.Entry<?, ?> entry = (Map.Entry<?, ?>) object;
+            return Objects.equals(key, entry.getKey())
+                    && Objects.equals(value, entry.getValue());
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(key) ^ Objects.hashCode(value);
+        }
+
+        @Override
+        public String toString() {
+            return key + "=" + value;
+        }
+    }
+
     private static final class ExpiredEntry<K, V> {
         private final K key;
         private final V value;
@@ -860,6 +1132,49 @@ public class FastMap<K, V> implements IFastMap<K, V> {
             this.value = value;
             this.callback = callback;
         }
+    }
+
+    private TreeMap<K, V> newTreeMap() {
+        return comparator == null ? new TreeMap<>() : new TreeMap<>(comparator);
+    }
+
+    private void validateSortedKey(Map<K, V> existingData, K key) {
+        for (K existingKey : existingData.keySet()) {
+            int comparison = compareKeys(existingKey, key);
+            if (comparison == 0 && !Objects.equals(existingKey, key)) {
+                throw new IllegalArgumentException(
+                        "Comparator considers different keys equal: "
+                                + existingKey + " and " + key);
+            }
+            if (comparison != 0 && Objects.equals(existingKey, key)) {
+                throw new IllegalArgumentException(
+                        "Comparator is inconsistent with equals for key: " + key);
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private int compareKeys(K left, K right) {
+        if (comparator != null) {
+            return comparator.compare(left, right);
+        }
+        return ((Comparable<? super K>) left).compareTo(right);
+    }
+
+    private static void reportBackgroundFailure(String message, Throwable throwable) {
+        Thread.UncaughtExceptionHandler handler = Thread.getDefaultUncaughtExceptionHandler();
+        if (handler != null) {
+            Thread thread = Thread.currentThread();
+            try {
+                handler.uncaughtException(thread, new RuntimeException(message, throwable));
+            } catch (Throwable ignored) {
+                // Background maintenance must continue even if an error handler fails.
+            }
+        }
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        return right > Long.MAX_VALUE - left ? Long.MAX_VALUE : left + right;
     }
 
     /**
@@ -878,15 +1193,62 @@ public class FastMap<K, V> implements IFastMap<K, V> {
      * @return FastMap对象字符串表示
      */
     public final String toString() {
-        try {
-            dataReadLock.lock();
-            if (enableSort) {
-                return this.dataTreeMap.toString();
-            } else {
-                return this.dataHashMap.toString();
-            }
-        } finally {
-            dataReadLock.unlock();
+        Iterator<Map.Entry<K, V>> iterator = entrySnapshot().iterator();
+        if (!iterator.hasNext()) {
+            return "{}";
         }
+
+        StringBuilder builder = new StringBuilder();
+        builder.append('{');
+        while (true) {
+            Map.Entry<K, V> entry = iterator.next();
+            Object key = entry.getKey();
+            Object value = entry.getValue();
+            builder.append(key == this ? "(this Map)" : key);
+            builder.append('=');
+            builder.append(value == this ? "(this Map)" : value);
+            if (!iterator.hasNext()) {
+                return builder.append('}').toString();
+            }
+            builder.append(',').append(' ');
+        }
+    }
+
+    @Override
+    public boolean equals(Object object) {
+        if (object == this) {
+            return true;
+        }
+        if (!(object instanceof Map)) {
+            return false;
+        }
+        Map<?, ?> other = (Map<?, ?>) object;
+        if (other.size() != size()) {
+            return false;
+        }
+        try {
+            for (Map.Entry<K, V> entry : entrySnapshot()) {
+                K key = entry.getKey();
+                V value = entry.getValue();
+                if (!Objects.equals(value, other.get(key))) {
+                    return false;
+                }
+                if (value == null && !other.containsKey(key)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (ClassCastException | NullPointerException ignored) {
+            return false;
+        }
+    }
+
+    @Override
+    public int hashCode() {
+        int hashCode = 0;
+        for (Map.Entry<K, V> entry : entrySnapshot()) {
+            hashCode += entry.hashCode();
+        }
+        return hashCode;
     }
 }
