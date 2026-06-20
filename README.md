@@ -206,7 +206,7 @@ mvn clean test
 mvn package
 ```
 
-测试覆盖：
+保留的自动化测试覆盖：
 
 - 并发读写与续期
 - 原子 `compute`
