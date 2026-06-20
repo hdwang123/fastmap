@@ -19,6 +19,9 @@ import static org.junit.Assert.*;
 
 public class FastMapAdditionalSafetyTest {
 
+    /**
+     * 验证排序写入失败时，HashMap和TreeMap都不会残留数据。
+     */
     @Test
     public void failedSortedPutMustNotModifyEitherIndex() {
         FastMap<Object, String> map = new FastMap<>(false, true);
@@ -32,6 +35,9 @@ public class FastMapAdditionalSafetyTest {
         }
     }
 
+    /**
+     * 验证putAll中存在非法排序Key时，整次批量写入保持原子性。
+     */
     @Test
     public void putAllMustBeAtomicWhenASortedKeyIsInvalid() {
         FastMap<Object, String> map = new FastMap<>(false, true);
@@ -50,6 +56,9 @@ public class FastMapAdditionalSafetyTest {
         }
     }
 
+    /**
+     * 验证Comparator与equals不一致时会拒绝写入冲突Key。
+     */
     @Test
     public void comparatorInconsistentWithEqualsMustBeRejected() {
         Comparator<String> sameLength = (left, right) ->
@@ -66,6 +75,9 @@ public class FastMapAdditionalSafetyTest {
         }
     }
 
+    /**
+     * 验证初始化方法不会作为公开API暴露，避免重复初始化破坏状态。
+     */
     @Test
     public void initializationMustNotBePublic() {
         for (Method method : FastMap.class.getDeclaredMethods()) {
@@ -76,6 +88,9 @@ public class FastMapAdditionalSafetyTest {
         }
     }
 
+    /**
+     * 验证keySet、values和entrySet视图的删除操作会写回原Map。
+     */
     @Test
     public void mapViewsMustBeBackedByTheMap() {
         FastMap<Integer, String> map = new FastMap<>(false, true);
@@ -91,6 +106,9 @@ public class FastMapAdditionalSafetyTest {
         assertTrue(map.isEmpty());
     }
 
+    /**
+     * 验证Map视图迭代器的remove操作会删除原Map中的数据。
+     */
     @Test
     public void mapViewIteratorRemoveMustWriteThrough() {
         FastMap<Integer, String> map = new FastMap<>(false, true);
@@ -103,6 +121,9 @@ public class FastMapAdditionalSafetyTest {
         assertTrue(map.isEmpty());
     }
 
+    /**
+     * 验证equals和hashCode遵循标准Map内容比较契约。
+     */
     @Test
     public void equalsAndHashCodeMustFollowMapContract() {
         FastMap<Integer, String> first = new FastMap<>(false);
@@ -115,6 +136,9 @@ public class FastMapAdditionalSafetyTest {
         assertEquals(first.hashCode(), second.hashCode());
     }
 
+    /**
+     * 验证全局过期实例注册表使用弱引用，避免阻止实例被回收。
+     */
     @Test
     public void expirableRegistryMustUseWeakReferences() throws Exception {
         new FastMap<>();
@@ -126,6 +150,9 @@ public class FastMapAdditionalSafetyTest {
         assertTrue(references.get(references.size() - 1) instanceof WeakReference);
     }
 
+    /**
+     * 验证续期会取消旧的定时回调，并只在新截止时间触发一次。
+     */
     @Test
     public void renewalMustCancelThePreviousScheduledCallback() throws Exception {
         FastMap<String, String> map = new FastMap<>();
@@ -145,6 +172,9 @@ public class FastMapAdditionalSafetyTest {
         assertEquals(1, count.get());
     }
 
+    /**
+     * 验证单个过期回调抛出异常不会影响其他回调继续执行。
+     */
     @Test
     public void callbackFailureMustNotPreventOtherCallbacks() throws Exception {
         FastMap<String, String> map = new FastMap<>();
@@ -159,6 +189,9 @@ public class FastMapAdditionalSafetyTest {
         assertTrue(successfulCallback.await(2, TimeUnit.SECONDS));
     }
 
+    /**
+     * 验证toString不会输出已经过期的数据。
+     */
     @Test
     public void toStringMustNotExposeExpiredEntries() throws Exception {
         FastMap<String, String> map = new FastMap<>();
@@ -169,6 +202,9 @@ public class FastMapAdditionalSafetyTest {
         assertEquals("{}", map.toString());
     }
 
+    /**
+     * 验证超大TTL不会因时间加法溢出而立即过期。
+     */
     @Test
     public void veryLargeTtlMustNotOverflowIntoImmediateExpiration() {
         FastMap<String, String> map = new FastMap<>();
@@ -180,6 +216,9 @@ public class FastMapAdditionalSafetyTest {
         assertTrue(map.ttl("key") > 0);
     }
 
+    /**
+     * 验证Map包含自身引用时，toString不会无限递归。
+     */
     @Test
     public void toStringMustHandleSelfReference() {
         FastMap<String, Object> map = new FastMap<>(false);

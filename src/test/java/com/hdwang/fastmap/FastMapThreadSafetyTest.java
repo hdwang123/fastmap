@@ -14,6 +14,9 @@ import static org.junit.Assert.*;
 
 public class FastMapThreadSafetyTest {
 
+    /**
+     * 验证启用过期功能时，默认Map方法不会因读锁升级而发生死锁。
+     */
     @Test(timeout = 5000)
     public void defaultMethodsMustNotDeadlockWhenExpirationIsEnabled() {
         FastMap<String, Integer> map = new FastMap<>();
@@ -25,6 +28,9 @@ public class FastMapThreadSafetyTest {
         assertEquals(1, sum.get());
     }
 
+    /**
+     * 验证replaceAll会同步更新HashMap和TreeMap两套索引。
+     */
     @Test
     public void replaceAllMustKeepSortedAndHashIndexesConsistent() {
         FastMap<Integer, Integer> map = new FastMap<>(false, true);
@@ -39,6 +45,9 @@ public class FastMapThreadSafetyTest {
         assertEquals(Integer.valueOf(21), map.subMap(2, 3).get(2));
     }
 
+    /**
+     * 验证entrySet中的Entry写回原Map时不会破坏双索引一致性。
+     */
     @Test
     public void entrySetMustWriteThroughWithoutBreakingIndexes() {
         FastMap<Integer, Integer> map = new FastMap<>(false, true);
@@ -50,6 +59,9 @@ public class FastMapThreadSafetyTest {
         assertEquals(Integer.valueOf(99), map.subMap(1, 2).get(1));
     }
 
+    /**
+     * 验证remove和clear会同步取消旧数据的过期元数据。
+     */
     @Test
     public void removeAndClearMustCancelOldExpirationMetadata() throws Exception {
         FastMap<String, String> removedMap = new FastMap<>();
@@ -69,6 +81,9 @@ public class FastMapThreadSafetyTest {
         assertEquals("new", clearedMap.get("key"));
     }
 
+    /**
+     * 验证不能为不存在的Key预设TTL并影响之后写入的数据。
+     */
     @Test
     public void expirationForMissingKeyMustNotAffectLaterInsert() throws Exception {
         FastMap<String, String> map = new FastMap<>();
@@ -80,6 +95,9 @@ public class FastMapThreadSafetyTest {
         assertEquals("value", map.get("key"));
     }
 
+    /**
+     * 验证Key续期后，旧截止时间不会误删数据或触发旧回调。
+     */
     @Test
     public void renewedExpirationMustIgnoreTheOldDeadline() throws Exception {
         FastMap<String, String> map = new FastMap<>();
@@ -95,6 +113,9 @@ public class FastMapThreadSafetyTest {
         assertEquals(0, callbackCount.get());
     }
 
+    /**
+     * 验证值为null的数据过期时，回调仍然只执行一次。
+     */
     @Test
     public void nullValueExpirationMustInvokeCallbackExactlyOnce() throws Exception {
         FastMap<String, String> map = new FastMap<>();
@@ -114,6 +135,9 @@ public class FastMapThreadSafetyTest {
         assertFalse(map.containsKey("key"));
     }
 
+    /**
+     * 验证多线程并发compute具有原子性，不会丢失计数更新。
+     */
     @Test
     public void concurrentComputeMustBeAtomic() throws Exception {
         final int threads = 12;
@@ -144,6 +168,9 @@ public class FastMapThreadSafetyTest {
         assertEquals(Integer.valueOf(threads * incrementsPerThread), map.get("counter"));
     }
 
+    /**
+     * 验证并发读写、续期、遍历和范围查询时数据结构保持稳定。
+     */
     @Test
     public void concurrentReadWriteExpireAndRenewMustRemainStable() throws Exception {
         final int keyCount = 100;
